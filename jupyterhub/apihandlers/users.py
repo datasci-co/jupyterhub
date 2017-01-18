@@ -15,7 +15,7 @@ from .base import APIHandler
 class UserListAPIHandler(APIHandler):
     @admin_only
     def get(self):
-        users = self.db.query(orm.User)
+        users = [ self._user_from_orm(u) for u in self.db.query(orm.User) ]
         data = [ self.user_model(u) for u in users ]
         self.write(json.dumps(data))
     
@@ -33,12 +33,24 @@ class UserListAPIHandler(APIHandler):
         admin = data.get('admin', False)
         
         to_create = []
+        invalid_names = []
         for name in usernames:
+            name = self.authenticator.normalize_username(name)
+            if not self.authenticator.validate_username(name):
+                invalid_names.append(name)
+                continue
             user = self.find_user(name)
             if user is not None:
-                self.log.warn("User %s already exists" % name)
+                self.log.warning("User %s already exists" % name)
             else:
                 to_create.append(name)
+        
+        if invalid_names:
+            if len(invalid_names) == 1:
+                msg = "Invalid username: %s" % invalid_names[0]
+            else:
+                msg = "Invalid usernames: %s" % ', '.join(invalid_names)
+            raise web.HTTPError(400, msg)
         
         if not to_create:
             raise web.HTTPError(400, "All %i users already exist" % len(usernames))
@@ -51,11 +63,10 @@ class UserListAPIHandler(APIHandler):
                 self.db.commit()
             try:
                 yield gen.maybe_future(self.authenticator.add_user(user))
-            except Exception:
+            except Exception as e:
                 self.log.error("Failed to create user: %s" % name, exc_info=True)
-                self.db.delete(user)
-                self.db.commit()
-                raise web.HTTPError(400, "Failed to create user: %s" % name)
+                del self.users[user]
+                raise web.HTTPError(400, "Failed to create user %s: %s" % (name, str(e)))
             else:
                 created.append(user)
         
@@ -104,8 +115,8 @@ class UserAPIHandler(APIHandler):
             yield gen.maybe_future(self.authenticator.add_user(user))
         except Exception:
             self.log.error("Failed to create user: %s" % name, exc_info=True)
-            self.db.delete(user)
-            self.db.commit()
+            # remove from registry
+            del self.users[user]
             raise web.HTTPError(400, "Failed to create user: %s" % name)
         
         self.write(json.dumps(self.user_model(user)))
@@ -127,10 +138,8 @@ class UserAPIHandler(APIHandler):
                 raise web.HTTPError(400, "%s's server is in the process of stopping, please wait." % name)
         
         yield gen.maybe_future(self.authenticator.delete_user(user))
-        
-        # remove from the db
-        self.db.delete(user)
-        self.db.commit()
+        # remove from registry
+        del self.users[user]
         
         self.set_status(204)
     
@@ -152,12 +161,14 @@ class UserServerAPIHandler(APIHandler):
     @admin_or_self
     def post(self, name):
         user = self.find_user(name)
-        if user.spawner:
-            state = yield user.spawner.poll()
+        if user.running:
+            # include notify, so that a server that died is noticed immediately
+            state = yield user.spawner.poll_and_notify()
             if state is None:
                 raise web.HTTPError(400, "%s's server is already running" % name)
 
-        yield self.spawn_single_user(user)
+        options = self.get_json_body()
+        yield self.spawn_single_user(user, options=options)
         status = 202 if user.spawn_pending else 201
         self.set_status(status)
 
@@ -170,7 +181,8 @@ class UserServerAPIHandler(APIHandler):
             return
         if not user.running:
             raise web.HTTPError(400, "%s's server is not running" % name)
-        status = yield user.spawner.poll()
+        # include notify, so that a server that died is noticed immediately
+        status = yield user.spawner.poll_and_notify()
         if status is not None:
             raise web.HTTPError(400, "%s's server is not running" % name)
         yield self.stop_single_user(user)
@@ -185,7 +197,7 @@ class UserAdminAccessAPIHandler(APIHandler):
     @admin_only
     def post(self, name):
         current = self.get_current_user()
-        self.log.warn("Admin user %s has requested access to %s's server",
+        self.log.warning("Admin user %s has requested access to %s's server",
             current.name, name,
         )
         if not self.settings.get('admin_access', False):
@@ -196,6 +208,7 @@ class UserAdminAccessAPIHandler(APIHandler):
         if not user.running:
             raise web.HTTPError(400, "%s's server is not running" % name)
         self.set_server_cookie(user)
+        current.other_user_cookies.add(name)
 
 
 default_handlers = [

@@ -1,4 +1,7 @@
 -r requirements.txt
-coveralls
+mock
+codecov
 pytest-cov
-pytest
+pytest>=2.8
+notebook
+requests-mock

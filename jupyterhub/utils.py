@@ -6,10 +6,12 @@
 from binascii import b2a_hex
 import errno
 import hashlib
+from hmac import compare_digest
 import os
 import socket
+from threading import Thread
 import uuid
-from hmac import compare_digest
+import warnings
 
 from tornado import web, gen, ioloop
 from tornado.httpclient import AsyncHTTPClient, HTTPError
@@ -28,22 +30,32 @@ def random_port():
 ISO8601_ms = '%Y-%m-%dT%H:%M:%S.%fZ'
 ISO8601_s = '%Y-%m-%dT%H:%M:%SZ'
 
+def can_connect(ip, port):
+    """Check if we can connect to an ip:port
+    
+    return True if we can connect, False otherwise.
+    """
+    try:
+        socket.create_connection((ip, port))
+    except socket.error as e:
+        if e.errno not in {errno.ECONNREFUSED, errno.ETIMEDOUT}:
+            app_log.error("Unexpected error connecting to %s:%i %s",
+                ip, port, e
+            )
+        return False
+    else:
+        return True
+
 @gen.coroutine
 def wait_for_server(ip, port, timeout=10):
     """wait for any server to show up at ip:port"""
     loop = ioloop.IOLoop.current()
     tic = loop.time()
     while loop.time() - tic < timeout:
-        try:
-            socket.create_connection((ip, port))
-        except socket.error as e:
-            if e.errno != errno.ECONNREFUSED:
-                app_log.error("Unexpected error waiting for %s:%i %s",
-                    ip, port, e
-                )
-            yield gen.Task(loop.add_timeout, loop.time() + 0.1)
-        else:
+        if can_connect(ip, port):
             return
+        else:
+            yield gen.sleep(0.1)
     raise TimeoutError("Server at {ip}:{port} didn't respond in {timeout} seconds".format(
         **locals()
     ))
@@ -66,15 +78,15 @@ def wait_for_http_server(url, timeout=10):
                 if e.code != 599:
                     # we expect 599 for no connection,
                     # but 502 or other proxy error is conceivable
-                    app_log.warn("Server at %s responded with error: %s", url, e.code)
-                yield gen.Task(loop.add_timeout, loop.time() + 0.25)
+                    app_log.warning("Server at %s responded with error: %s", url, e.code)
+                yield gen.sleep(0.1)
             else:
                 app_log.debug("Server at %s responded with %s", url, e.code)
                 return
         except (OSError, socket.error) as e:
             if e.errno not in {errno.ECONNABORTED, errno.ECONNREFUSED, errno.ECONNRESET}:
-                app_log.warn("Failed to connect to %s (%s)", url, e)
-            yield gen.Task(loop.add_timeout, loop.time() + 0.25)
+                app_log.warning("Failed to connect to %s (%s)", url, e)
+            yield gen.sleep(0.1)
         else:
             return
     
@@ -192,3 +204,4 @@ def url_path_join(*pieces):
         result = '/'
 
     return result
+
