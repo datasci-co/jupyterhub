@@ -5,3 +5,8 @@ jinja2
 pamela
 sqlalchemy>=1.0
 requests
+ipywidgets
+
+# Qgrid
+qgrid==1.0.0a1
+notebook==4.3.2
