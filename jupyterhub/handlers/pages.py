@@ -27,6 +27,8 @@ class RootHandler(BaseHandler):
     Otherwise, renders login page.
     """
     def get(self):
+        # from pdb import set_trace; set_trace()
+        print('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!')
         next_url = self.get_argument('next', '')
         if next_url and not next_url.startswith('/'):
             self.log.warning("Disallowing redirect outside JupyterHub: %r", next_url)
