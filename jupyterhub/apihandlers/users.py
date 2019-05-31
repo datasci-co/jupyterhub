@@ -8,7 +8,7 @@ import json
 from tornado import gen, web
 
 from .. import orm
-from ..utils import admin_only
+from ..utils import admin_only, new_token
 from .base import APIHandler
 
 
@@ -185,6 +185,23 @@ class UserServerAPIHandler(APIHandler):
         status = yield user.spawner.poll_and_notify()
         if status is not None:
             raise web.HTTPError(400, "%s's server is not running" % name)
+
+        from jupyterhub import orm
+        bb = user.db.query(orm.APIToken).filter(orm.APIToken.user_id == user.id)
+        for access_token in bb:
+            print('/////////////////////////////////////')
+            print(access_token)
+            user.db.delete(access_token)
+            user.db.commit()
+        print(',,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,')
+        print(user)
+        print(user.cookie_id)
+        user.cookie_id = new_token()
+        # user.db.delete(user.cookie_id)
+        user.db.commit()
+        # from pdb import set_trace; set_trace()
+        print('OOOOOOOOOOOOOWOWOWOWOWOWOWOWOWWOWOWOWOWOWOWOWOWOWOWOWWOO')
+
         yield self.stop_single_user(user)
         status = 202 if user.stop_pending else 204
         self.set_status(status)
