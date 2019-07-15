@@ -24,10 +24,13 @@ class TokenAPIHandler(APIHandler):
     def post(self):
         if self.authenticator is not None:
           data = self.get_json_body()
-          username = yield self.authenticator.authenticate(self, data)
-          if username is None:
+          authenticated = yield self.authenticator.authenticate(self, data)
+          if authenticated is None:
             raise web.HTTPError(403)
-          user = self.find_user(username)
+
+          if isinstance(authenticated, dict):
+              authenticated = authenticated.get('name')
+          user = self.find_user(authenticated)
           api_token = user.new_api_token()
           self.write(json.dumps({"Authentication":api_token}))
         else:

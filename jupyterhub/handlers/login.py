@@ -68,34 +68,18 @@ class LoginHandler(BaseHandler):
         for arg in self.request.arguments:
             data[arg] = self.get_argument(arg)
 
-        auth_timer = self.statsd.timer('login.authenticate').start()
-        username = yield self.authenticate(data)
-        auth_timer.stop(send=False)
-
-        if username:
-            self.statsd.incr('login.success')
-            self.statsd.timing('login.authenticate.success', auth_timer.ms)
-            user = self.user_from_username(username)
-            already_running = False
-            if user.spawner:
-                status = yield user.spawner.poll()
-                already_running = (status == None)
-            if not already_running and not user.spawner.options_form:
-                yield self.spawn_single_user(user)
-            self.set_login_cookie(user)
+        user = yield self.login_user(data)
+        if user:
             next_url = self.get_argument('next', default='')
             if not next_url.startswith('/'):
                 next_url = ''
             next_url = next_url or self.hub.server.base_url
             self.redirect(next_url)
-            self.log.info("User logged in: %s", username)
+            self.log.info("User logged in: %s", user.name)
         else:
-            self.statsd.incr('login.failure')
-            self.statsd.timing('login.authenticate.failure', auth_timer.ms)
-            self.log.debug("Failed login for %s", data.get('username', 'unknown user'))
             html = self._render(
                 login_error='Invalid username or password',
-                username=username,
+                username=data.get('username', 'unknown user'),
             )
             self.finish(html)
 
