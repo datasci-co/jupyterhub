@@ -168,17 +168,28 @@ class Authenticator(LoggingConfigurable):
          - `normalize_username` normalizes the username
          - `check_whitelist` checks against the user whitelist
         """
-        username = yield self.authenticate(handler, data)
-        if username is None:
+        authenticated = yield self.authenticate(handler, data)
+        if authenticated is None:
             return
-        username = self.normalize_username(username)
+
+        if isinstance(authenticated, dict):
+            if 'name' not in authenticated:
+                raise ValueError("user missing name attr: %r" % authenticated)
+        else:
+            authenticated = {'name': authenticated}
+
+        authenticated.setdefault('auth_state', None)
+
+        authenticated['name'] = username = self.normalize_username(
+            authenticated['name'],
+        )
         if not self.validate_username(username):
             self.log.warning("Disallowing invalid username %r.", username)
             return
 
         whitelist_pass = yield gen.maybe_future(self.check_whitelist(username))
         if whitelist_pass:
-            return username
+            return authenticated
         else:
             self.log.warning("User %r not in whitelist.", username)
             return

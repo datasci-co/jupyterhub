@@ -284,6 +284,55 @@ class BaseHandler(RequestHandler):
         else:
             self.log.error("No authentication function, login is impossible!")
 
+    def auth_to_user(self, authenticated):
+        """Persist data from .authenticate() to the User database.
+
+        Args:
+            authenticated(dict): return data from .authenticate
+        Return:
+            user(User): the constructed User object
+        """
+        if isinstance(authenticated, str):
+            authenticated = {'name': authenticated}
+
+        username = authenticated['name']
+        auth_state = authenticated.get('auth_state')
+
+        user = self.user_from_username(username)
+        if auth_state:
+            user.auth_state = auth_state
+            self.db.commit()
+
+        return user
+
+    @gen.coroutine
+    def login_user(self, data=None):
+        """Login a user"""
+        auth_timer = self.statsd.timer('login.authenticate').start()
+        authenticated = yield self.authenticate(data)
+        auth_timer.stop(send=False)
+
+        if authenticated:
+            user = self.auth_to_user(authenticated)
+            already_running = False
+            if user.spawner:
+                status = yield user.spawner.poll()
+                already_running = (status == None)
+            if not already_running and not user.spawner.options_form:
+                yield self.spawn_single_user(user)
+            self.set_login_cookie(user)
+            self.statsd.incr('login.success')
+            self.statsd.timing('login.authenticate.success', auth_timer.ms)
+            self.log.info("User logged in: %s", user.name)
+            return user
+        else:
+            self.statsd.incr('login.failure')
+            self.statsd.timing('login.authenticate.failure', auth_timer.ms)
+            self.log.warning(
+                "Failed login for %s",
+                (data or {}).get('username', 'unknown user'),
+            )
+
 
     #---------------------------------------------------------------
     # spawning-related
